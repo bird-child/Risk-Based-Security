@@ -6,7 +6,8 @@
 
 #Packages----------------------------------------------------------------------
 pacman::p_load(dplyr, tidyr, broom, forcats, ggplot2, lubridate, purrr, 
-               stringr, survival, readr, Hmisc, rms, survminer)
+               stringr, survival, readr, Hmisc, rms, survminer, randomForest, 
+               missForest)
 #------------------------------------------------------------------------------
 
 #Data Importation--------------------------------------------------------------
@@ -24,26 +25,45 @@ rbs <- read_csv("C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_B
 
 #Data Exploration--------------------------------------------------------------
 # describe(rbs)
-
-
-nms <- names(rbs)
-missing <- unlist(lapply(nms, function (x) {sum(is.na(rbs[,x]))/nrow(rbs)}))
-names(missing) <- nms
-
-1 - nrow(rbs[complete.cases(rbs),])/nrow(rbs)
-
-rbs <- rbs %>%
-        mutate(court_cost = sum(as.numeric(str_extract_all(`Court costs`, "[0-9]+")[[1]])), 
-               non_court_cost = sum(as.numeric(str_extract_all(`Non court costs`, "[0-9]+")[[1]])))
-
-#------------------------------------------------------------------------------
-
 names(rbs) <- gsub(" ", ".", names(rbs))
 
-mod.data <- rbs %>%
-        mutate(time = as.numeric(as.Date(Incident.occurred) - as.Date('2015-01-01')), 
-               status = 1) %>%
-        filter(time >= 0, !is.na(time))
+rbs <- rbs %>%
+        mutate(court.cost = sum(as.numeric(str_extract_all(Court.costs, "[0-9]+")[[1]]), 
+                                na.rm = TRUE), 
+               non.court.cost = sum(as.numeric(str_extract_all(Non.court.costs, "[0-9]+")[[1]])), 
+               person.cost = as.numeric(Total.affected), 
+               time = as.numeric(as.Date(Date.reported, format = "%m/%d/%y") - as.Date('2015-01-01')), 
+               status = 1, 
+               Date.reported = as.Date(Date.reported, format = "%m/%d/%y"), 
+               Date.discovered.by.organization = as.Date(Date.discovered.by.organization), 
+               Date.organization.mails.notifications = as.Date(Date.organization.mails.notifications), 
+               Date.records.recovered = as.Date(Date.records.recovered), 
+               Date.lawsuit.filed = as.Date(Date.lawsuit.filed), 
+               Date.arrest.made = as.Date(Date.arrest.made), 
+               Date.of.revenue = as.Date(Date.of.revenue, format = "%m/%d/%y"), 
+               Date.of.employee.count = as.Date(Date.of.employee.count, format = "%m/%d/%y"), 
+               Created.at = as.Date(Created.at),
+               Regulatory.action.taken = as.Date(Regulatory.action.taken), 
+               Incident.occurred = as.Date(Incident.occurred), 
+               Updated.at = as.Date(Updated.at)) %>%
+        dplyr::select(-Urls, -`Organization.-.address.1`, - `Organization.-.address.2`, 
+                      -Exploit.cve, -References, -Summary, -`Breach.location.-.address`, 
+                      -Latitude, -Longitude, -Gmaps, -Organization.address, -Naics.code, 
+                      -`Actor.-.person`, -`Actor.-.group`, -Id, 
+                      -Name, -`Organization.-.city`, -`Organization.-.postcode`, 
+                      -Data.type, -Third.party.name, -Stock.symbol, -Court.costs, 
+                      -Non.court.costs, -`Breach.location.-.country`, 
+                      -`Breach.location.-.state`, -Related.incidents, 
+                      -Total.affected) %>%
+        mutate_if(is.character, factor) %>%
+        mutate_if(is.Date, as.numeric)
+
+rbs.imputed <- missForest(as.data.frame(rbs), ntree = 300, verbose = TRUE)
+#------------------------------------------------------------------------------
+
+mod.data <- rbs 
+
+hist(mod.data$time)
 
 fit <- survfit(Surv(time, status)~1, data = mod.data)
 plot.data <- tidy(fit)
@@ -121,3 +141,10 @@ ggplot(rbs) +
 ggplot(rbs) +
   geom_boxplot(aes(x = paste(Business.type, Data.family), y = Severity.score)) +
   theme(axis.text.x = element_text(angle = 90))
+
+ggplot(rbs) + 
+  geom_point(aes(x = Severity.score, y = as.numeric(Total.affected), color = Data.family), 
+             alpha = 0.5, size = 2) +
+  coord_cartesian(ylim = c(0, 1000000)) +
+  theme(legend.position = "bottom") +
+  facet_wrap(~Business.type)
