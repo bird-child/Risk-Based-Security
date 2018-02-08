@@ -1,7 +1,12 @@
 #------------------------------------------------------------------------------
+#Risk Based Security
+#Phase I
+#Data Cleaning and Imputation
 #------------------------------------------------------------------------------
 
 #Purpose-----------------------------------------------------------------------
+#Cleans data for survival analyses and imputes total number of people affected 
+#by th breach
 #------------------------------------------------------------------------------
 
 #Packages----------------------------------------------------------------------
@@ -11,6 +16,7 @@ pacman::p_load(dplyr, tidyr, broom, forcats, ggplot2, lubridate, purrr,
 #------------------------------------------------------------------------------
 
 #Data Importation--------------------------------------------------------------
+#Two rows were not quite right, so I removed them and resaved the data set.
 # rbs <- 
 #   read_csv("C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/CRA Export (2015-2017).csv")
 # 
@@ -20,20 +26,28 @@ pacman::p_load(dplyr, tidyr, broom, forcats, ggplot2, lubridate, purrr,
 # write_csv(rbs, 
 #           "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/CRA_Export.csv")
 
-rbs <- read_csv("C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/CRA_Export.csv")
+#Uncleaned data
+raw <- read_csv("C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/CRA_Export.csv")
 #------------------------------------------------------------------------------
 
 #Data Exploration--------------------------------------------------------------
 # describe(rbs)
-names(rbs) <- gsub(" ", ".", names(rbs))
+names(raw) <- gsub(" ", ".", names(raw))
 
-rbs <- rbs %>%
-        mutate(court.cost = sum(as.numeric(str_extract_all(Court.costs, "[0-9]+")[[1]]), 
-                                na.rm = TRUE), 
-               non.court.cost = sum(as.numeric(str_extract_all(Non.court.costs, "[0-9]+")[[1]])), 
-               person.cost = as.numeric(Total.affected), 
+rbs <- raw %>%
+              #Regex to extract court costs
+        mutate(court.cost = map_dbl(map(str_extract_all(Court.costs, "[0-9]+"), 
+                                        as.numeric), sum),
+               #Regex to extract non-court costs
+               non.court.cost = map_dbl(map(str_extract_all(Non.court.costs, "[0-9]+"), 
+                                            as.numeric), sum),
+               #Forces Total.affected from character to numeric
+               person.cost = as.numeric(Total.affected),
+               #Days from 1/1/2015 to breach
                time = as.numeric(as.Date(Date.reported, format = "%m/%d/%y") - as.Date('2015-01-01')), 
+               #All records are breaches
                status = 1, 
+               #Formats data fields
                Date.reported = as.Date(Date.reported, format = "%m/%d/%y"), 
                Date.discovered.by.organization = as.Date(Date.discovered.by.organization), 
                Date.organization.mails.notifications = as.Date(Date.organization.mails.notifications), 
@@ -46,6 +60,7 @@ rbs <- rbs %>%
                Regulatory.action.taken = as.Date(Regulatory.action.taken), 
                Incident.occurred = as.Date(Incident.occurred), 
                Updated.at = as.Date(Updated.at)) %>%
+        #Removes character fields with too many levels to be factors
         dplyr::select(-Urls, -`Organization.-.address.1`, - `Organization.-.address.2`, 
                       -Exploit.cve, -References, -Summary, -`Breach.location.-.address`, 
                       -Latitude, -Longitude, -Gmaps, -Organization.address, -Naics.code, 
@@ -55,96 +70,26 @@ rbs <- rbs %>%
                       -Non.court.costs, -`Breach.location.-.country`, 
                       -`Breach.location.-.state`, -Related.incidents, 
                       -Total.affected) %>%
+        #Forces character fields to factors
         mutate_if(is.character, factor) %>%
+        #Forces date fields to numeric
         mutate_if(is.Date, as.numeric)
+
+#Determines which fields have enough values to impute
+enough <- data.frame(name = names(rbs), 
+           prop.miss = unlist(lapply(seq_along(rbs), 
+                                     function (x) {
+                                       sum(is.na(rbs[, x]))/nrow(rbs)
+                                       })), 
+           index = 1:ncol(rbs)) %>%
+           arrange(desc(prop.miss)) %>%
+           filter(prop.miss < 0.5)
+
+rbs <- subset(rbs, select = enough$index)
+
+save(rbs, file = "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rbs_miss.Rda")
+
+1 - nrow(rbs[complete.cases(rbs), ])/nrow(rbs)
 
 rbs.imputed <- missForest(as.data.frame(rbs), ntree = 300, verbose = TRUE)
 #------------------------------------------------------------------------------
-
-mod.data <- rbs 
-
-hist(mod.data$time)
-
-fit <- survfit(Surv(time, status)~1, data = mod.data)
-plot.data <- tidy(fit)
-
-ggplot(plot.data) +
-  geom_step(aes(x = time/365.25, y = 1 - estimate), size = 1) +
-  ggtitle("Overall") +
-  xlab("Years") +
-  ylab("Probability of Breach") +
-  theme_bw()
-
-fig.path <- "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/graphics/"
-
-ggsave(paste0(fig.path, "overall.png"))
-
-fit <- survfit(Surv(time, status) ~ Data.family, data = mod.data)
-plot.data <- tidy(fit) %>%
-              rowwise() %>%
-              mutate(`Data Family` = str_split(strata, "=")[[1]][2])
-
-ggplot(plot.data) +
-  geom_step(aes(x = time/365.25, y = 1 - estimate, color = `Data Family`), 
-            size = 1) +
-  ggtitle("By Data Family") +
-  xlab("Years") +
-  ylab("Probability of Breach") +
-  theme_bw()
-
-ggsave(paste0(fig.path, "Data_Family.png"))
-
-
-fit <- survfit(Surv(time, status) ~ Business.type, data = mod.data)
-plot.data <- tidy(fit) %>%
-  rowwise() %>%
-  mutate(`Business Type` = str_split(strata, "=")[[1]][2])
-
-ggplot(plot.data) +
-  geom_step(aes(x = time/365.25, y = 1 - estimate, color = `Business Type`), 
-            size = 1) +
-  ggtitle("By Business Type") +
-  xlab("Years") +
-  ylab("Probability of Breach") +
-  theme_bw()
-
-ggsave(paste0(fig.path, "Business_Type.png"))
-
-
-fit <- survfit(Surv(time, status) ~ Business.type + Data.family, data = mod.data)
-plot.data <- tidy(fit) %>%
-  rowwise() %>%
-  mutate(strata1 = gsub(", Data.family=", " ", strata), 
-         strata2 = gsub("Business.type=", "", strata1), 
-         `Business Type` = str_split(strata2, " ")[[1]][1], 
-         `Data Family` = str_split(strata2, " ")[[1]][2])
-
-ggplot(plot.data) +
-  geom_step(aes(x = time/365.25, y = 1 - estimate, color = `Data Family`), 
-            size = 1) +
-  ggtitle("By Business Type") +
-  xlab("Years") +
-  ylab("Probability of Breach") +
-  theme_bw() +
-  facet_wrap(~`Business Type`)
-
-
-ggplot(rbs) +
-  geom_histogram(aes(x = Severity.score))
-
-ggplot(rbs) +
-  geom_boxplot(aes(y = Severity.score, x = Data.family)) 
-
-ggplot(rbs) +
-  geom_boxplot(aes(x = Business.type, y = Severity.score)) 
-
-ggplot(rbs) +
-  geom_boxplot(aes(x = paste(Business.type, Data.family), y = Severity.score)) +
-  theme(axis.text.x = element_text(angle = 90))
-
-ggplot(rbs) + 
-  geom_point(aes(x = Severity.score, y = as.numeric(Total.affected), color = Data.family), 
-             alpha = 0.5, size = 2) +
-  coord_cartesian(ylim = c(0, 1000000)) +
-  theme(legend.position = "bottom") +
-  facet_wrap(~Business.type)
