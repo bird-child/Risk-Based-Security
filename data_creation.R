@@ -69,11 +69,12 @@ rbs <- raw %>%
                       -Data.type, -Third.party.name, -Stock.symbol, -Court.costs, 
                       -Non.court.costs, -`Breach.location.-.country`, 
                       -`Breach.location.-.state`, -Related.incidents, 
-                      -Total.affected) %>%
+                      -Total.affected, -Economic.sector) %>%
         #Forces character fields to factors
         mutate_if(is.character, factor) %>%
         #Forces date fields to numeric
-        mutate_if(is.Date, as.numeric)
+        mutate_if(is.Date, as.numeric) %>%
+        mutate_if(is.logical, factor)
 
 #Determines which fields have enough values to impute
 enough <- data.frame(name = names(rbs), 
@@ -87,9 +88,23 @@ enough <- data.frame(name = names(rbs),
 
 rbs <- subset(rbs, select = enough$index)
 
+rbs <- rbs %>%
+        mutate_if(is.factor, fct_explicit_na)
+
 save(rbs, file = "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rbs_miss.Rda")
+
+rbs <- dplyr::select(rbs, -Incident.occurred)
 
 1 - nrow(rbs[complete.cases(rbs), ])/nrow(rbs)
 
-rbs.imputed <- missForest(as.data.frame(rbs), ntree = 300, verbose = TRUE)
+system.time(
+rf <- randomForest(person.cost ~ ., data = rbs[complete.cases(rbs), ], ntrees = 1000)
+)
+
+save(rf, file = "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rf.Rda")
+
+lin <- lm(person.cost ~ ., data = dplyr::select(rbs, -time, -status))
+poi <- glm(person.cost ~ ., data = dplyr::select(rbs, -time, -status), family = poisson)
+
+# rbs.imputed <- missForest(as.data.frame(rbs), ntree = 300, verbose = TRUE)
 #------------------------------------------------------------------------------

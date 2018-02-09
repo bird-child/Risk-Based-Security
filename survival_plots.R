@@ -10,7 +10,7 @@
 
 #Packages----------------------------------------------------------------------
 pacman::p_load(dplyr, tidyr, broom, forcats, ggplot2, lubridate, purrr, 
-               stringr, survival, Hmisc, rms, survminer)
+               stringr, survival, Hmisc, rms, survminer, survMisc)
 #------------------------------------------------------------------------------
 
 #Data Importation--------------------------------------------------------------
@@ -25,9 +25,19 @@ hist(mod.data$time)
 fit <- survfit(Surv(time, status)~1, data = mod.data)
 plot.data <- tidy(fit)
 
+summary(fit)$table[, "median"]
+
 ggplot(plot.data) +
+  geom_segment(aes(x = summary(fit)$table["median"]/365.25, 
+                   xend = summary(fit)$table["median"]/365.25, 
+                   y = 0, yend = 0.5), size = 1, linetype = "dashed") +
+  geom_segment(aes(x = 0, 
+                   xend = summary(fit)$table["median"]/365.25, 
+                   y = 0.5, yend = 0.5), size = 1, linetype = "dashed") +
   geom_step(aes(x = time/365.25, y = 1 - estimate), size = 1) +
-  ggtitle("Overall") +
+  geom_label(aes(x = 0.7, y = 0.9,
+  label = "Half of all companies \n experienced a breach \n within 1.5 years of 1/1/2015" )) +
+  ggtitle("Overall Risk of Breach") +
   xlab("Years") +
   ylab("Probability of Breach") +
   theme_bw()
@@ -44,7 +54,7 @@ plot.data <- tidy(fit) %>%
 ggplot(plot.data) +
   geom_step(aes(x = time/365.25, y = 1 - estimate, color = `Data Family`), 
             size = 1) +
-  ggtitle("By Data Family") +
+  ggtitle("Risk of Breach by Data Family") +
   xlab("Years") +
   ylab("Probability of Breach") +
   theme_bw()
@@ -60,7 +70,7 @@ plot.data <- tidy(fit) %>%
 ggplot(plot.data) +
   geom_step(aes(x = time/365.25, y = 1 - estimate, color = `Business Type`), 
             size = 1) +
-  ggtitle("By Business Type") +
+  ggtitle("Risk of Breach by Business Type") +
   xlab("Years") +
   ylab("Probability of Breach") +
   theme_bw()
