@@ -97,14 +97,24 @@ rbs <- dplyr::select(rbs, -Incident.occurred)
 
 1 - nrow(rbs[complete.cases(rbs), ])/nrow(rbs)
 
-system.time(
-rf <- randomForest(person.cost ~ ., data = rbs[complete.cases(rbs), ], ntrees = 1000)
-)
+# system.time(
+# rf <- randomForest(person.cost ~ ., data = rbs[complete.cases(rbs), ], ntrees = 1000)
+# )
+# 
+# save(rf, file = "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rf.Rda")
 
-save(rf, file = "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rf.Rda")
+load("C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rf.Rda")
 
-lin <- lm(person.cost ~ ., data = dplyr::select(rbs, -time, -status))
+lin <- lm(sqrt(person.cost) ~ ., data = dplyr::select(rbs, -time, -status))
 poi <- glm(person.cost ~ ., data = dplyr::select(rbs, -time, -status), family = poisson)
 
 # rbs.imputed <- missForest(as.data.frame(rbs), ntree = 300, verbose = TRUE)
+
+rbs.imp <- raw %>%
+            mutate(`Total Affected` = coalesce(as.numeric(Total.affected), 
+                                               predict(rf, rbs))) %>%
+            dplyr::select(Id, `Total Affected`)
+
+save(rbs.imp, file = "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rbs_imp.Rda")
+write_csv(rbs.imp, "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rbs_imp.csv")
 #------------------------------------------------------------------------------
