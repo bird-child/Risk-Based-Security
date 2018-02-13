@@ -25,7 +25,7 @@ hist(mod.data$time)
 fit <- survfit(Surv(time, status)~1, data = mod.data)
 plot.data <- tidy(fit)
 
-summary(fit)$table[, "median"]
+summary(fit)$table["median"]
 
 ggplot(plot.data) +
   geom_segment(aes(x = summary(fit)$table["median"]/365.25, 
@@ -94,6 +94,41 @@ ggplot(plot.data) +
   ylab("Probability of Breach") +
   theme_bw() +
   facet_wrap(~`Business Type`)
+
+
+mod.data$breach.ty <- fct_lump(mod.data$Breach.type, prop = 0.04)
+
+fit <- survfit(Surv(time, status) ~ breach.ty, data = mod.data)
+plot.data <- tidy(fit) %>%
+  rowwise() %>%
+  mutate(`Breach Type` = str_split(strata, "=")[[1]][2])
+
+ggplot(plot.data) +
+  geom_step(aes(x = time/365.25, y = 1 - estimate, color = `Breach Type`), 
+            size = 1) +
+  ggtitle("Risk of Breach by Breach Type") +
+  xlab("Years") +
+  ylab("Probability of Breach") +
+  theme_bw()
+
+ggsave(paste0(fig.path, "Breach_Type.png"))
+
+
+fit <- survfit(Surv(time, status) ~ Targeted, data = mod.data)
+plot.data <- tidy(fit) %>%
+  rowwise() %>%
+  mutate(Targeted = str_split(strata, "=")[[1]][2]) %>%
+  filter(Targeted != "(Missing)")
+
+ggplot(plot.data) +
+  geom_step(aes(x = time/365.25, y = 1 - estimate, color = Targeted), 
+            size = 1) +
+  ggtitle("Risk of Breach by Target Type") +
+  xlab("Years") +
+  ylab("Probability of Breach") +
+  theme_bw()
+
+ggsave(paste0(fig.path, "Targeted.png"))
 
 
 ggplot(rbs) +
