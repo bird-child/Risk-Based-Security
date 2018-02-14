@@ -11,112 +11,94 @@
 
 #Packages----------------------------------------------------------------------
 pacman::p_load(dplyr, tidyr, broom, forcats, ggplot2, lubridate, purrr, 
-               stringr, randomForest, caret, readr, perturb, corrplot)
-d#------------------------------------------------------------------------------
+               stringr, randomForest, caret, readr, perturb, corrplot, 
+               pROC)
+#------------------------------------------------------------------------------
 
 #Data Importation--------------------------------------------------------------
 load("C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rbs_miss.Rda")
 
-rbs <- dplyr::select(rbs, -Incident.occurred, -status, -time)
+rbs2 <- rbs %>%
+          mutate(y = factor(ifelse(person.cost >= 2000, "1", "0"))) %>%
+          dplyr::select(-Incident.occurred, -status, -time, -person.cost, -Id)
 #------------------------------------------------------------------------------
 
 #Model Fitting-----------------------------------------------------------------
 set.seed(12345)
 
 #Restrict to complete cases
-rbs.complete <- rbs[complete.cases(rbs), ] #%>%
+rbs.complete <- rbs2[complete.cases(rbs), ] #%>%
                   #Getting less accurate results including the handful of 
                   #records with more than 100 000 000 affected
                   #filter(person.cost < 100000000)
 
-#There's some colliniearity problems going on
-fit <- lm(sqrt(person.cost) ~ ., rbs.complete, x = TRUE)
-mc <- colldiag(fit$x)
-
-# View(mc$pi[mc$condindx > 30, ])
-
-problem <- abs(cor(fit$x, method = "spearman")) > 0.75
-problem[unlist(lapply(1:ncol(problem), function (x) {sum(problem[ ,x], na.rm = TRUE)})), ]
-
 #Splits data into two equal folds
-folds = createFolds(rbs.complete$person.cost, k = 2, list = TRUE, 
+folds = createFolds(rbs.complete$y, k = 3, list = TRUE, 
                     returnTrain = FALSE)
 
 #How does the linear model do?
-fit <- lm(log(person.cost) ~ ., rbs.complete[folds$Fold1, ])
-summ <- summary(fit)
-mse <- sum(resid^2)/nrow(rbs.complete[folds$Fold1, ])
-sqrt(mse)
-
-pred <- predict(fit, rbs.complete[folds$Fold2, ])
-obs <- rbs.complete[folds$Fold2, ]$person.cost
-resid <- obs - rf.test
-mse <- sum(resid^2)/nrow(rbs.complete[folds$Fold2, ])
-sqrt(mse)
+fit <- glm(y ~ ., rbs.complete[folds$Fold1, ], family = binomial)
+pred <- predict(fit, rbs.complete[folds$Fold2, ], type = "response")
+obs <- rbs.complete[folds$Fold2, ]$y
 
 
 #Fits the training model
-rf.train <- randomForest(person.cost ~ ., data = rbs.complete[folds$Fold1, ], 
+rf.train <- randomForest(y ~ ., data = rbs.complete[-folds$Fold3, ], 
                          ntrees = 1000)
-pred <- predict(rf.train)
-obs <- rbs.complete[folds$Fold1, ]$person.cost
-resid <- obs - pred
-mse <- sum(resid^2)/nrow(rbs.complete[folds$Fold1, ])
-sqrt(mse)
+pred <- predict(rf.train, type = "class")
+obs <- rbs.complete[-folds$Fold3, ]$y
+forest.confusion <- table(obs, pred)
+forest.confusion
+forest.misclass <- (forest.confusion[1, 2] + forest.confusion[2, 1])/sum(forest.confusion)
+forest.misclass
+forest.specificity <- forest.confusion[1, 1]/(forest.confusion[1, 1] + forest.confusion[1, 2])
+forest.specificity
+forest.sensitivity <- forest.confusion[2, 2]/(forest.confusion[2, 1] + forest.confusion[2, 2])
+forest.sensitivity
+
+pred <- predict(rf.train, type = "response")
+
+model.roc <- roc(obs, as.numeric(pred))
+plot.roc(model.roc)
+print(model.roc$auc)
 
 #Evaluates how the model performs on the training set
-rf.test <- predict(rf.train, rbs.complete[folds$Fold2, ])
-obs <- rbs.complete[folds$Fold2, ]$person.cost
-resid <- obs - rf.test
-mse <- sum(resid^2)/nrow(rbs.complete[folds$Fold2, ])
-sqrt(mse)
+pred <- predict(rf.train, rbs.complete[folds$Fold3, ], type = "class")
+obs <- rbs.complete[folds$Fold3, ]$y
+forest.confusion <- table(obs, pred)
+forest.confusion
+forest.misclass <- (forest.confusion[1, 2] + forest.confusion[2, 1])/sum(forest.confusion)
+forest.misclass
+forest.specificity <- forest.confusion[1, 1]/(forest.confusion[1, 1] + forest.confusion[1, 2])
+forest.specificity
+forest.sensitivity <- forest.confusion[2, 2]/(forest.confusion[2, 1] + forest.confusion[2, 2])
+forest.sensitivity
+
+
+pred <- predict(rf.train, rbs.complete[folds$Fold3, ], type = "response")
+
+model.roc <- roc(obs, as.numeric(pred))
+plot.roc(model.roc)
+print(model.roc$auc)
+
 
 #Final model
 system.time(
-rf <- randomForest(person.cost ~ ., data = rbs.complete, ntrees = 1000)
+rf <- randomForest(y ~ ., data = rbs.complete, ntrees = 1000)
 )
 
 save(rf, file = "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rf.Rda")
 
-load("C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rf.Rda")
-#------------------------------------------------------------------------------
-
-#Confidence Intervals----------------------------------------------------------
-# Function that returns MAPE
-mape <- function( actualValues  , predictedValues )
-{
-  # actualValues = NewData$Sepal.Length
-  # predictedValues = as.numeric(predictions_for_seed)
-  mean(abs((actualValues-predictedValues)/ actualValues ) * 100)
-}
-
-#make model object
-MODEL = lm(sqrt(person.cost) ~ ., rbs.complete, x = TRUE)
-DF = rbs.complete
-#you wil be storing predictions on this list
-list_of_prediction = list()
-
-for(RandomGenNumber in 1:100){
-  NewData = DF[sample(1:nrow(DF)),]
-  NewData = NewData[1:round(.25*nrow(NewData)),]
-  
-  #this is where you predict
-  predictions_for_seed = predict(MODEL, NewData)
-  MAPE_Score = mape(NewData$person.cost ,as.numeric(predictions_for_seed))
-  list_of_prediction = c(list_of_prediction,MAPE_Score)
-  print( MAPE_Score )
-}
-
-
-#now you can do all sorts of stuff here to get ranges
-
-All_Mapes = unlist( list_of_prediction )
+# load("C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rf.Rda")
 #------------------------------------------------------------------------------
 
 #Final Imputations-------------------------------------------------------------
-rbs.imp <- raw %>%
-  mutate(`Total Affected` = coalesce(as.numeric(Total.affected), 
-                                     predict(rf, rbs))) %>%
+rbs.imp <- rbs %>%
+  mutate(y = factor(ifelse(person.cost >= 2000, "1", "0")),
+         `Total Affected` = factor(coalesce(y, 
+                                     predict(rf, rbs, type = "class")), 
+                                   levels = c("0", "1"), 
+                                   label = c("<2000", ">=2000"))) %>%
   dplyr::select(Id, `Total Affected`)
 
 save(rbs.imp, file = "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rbs_imp.Rda")

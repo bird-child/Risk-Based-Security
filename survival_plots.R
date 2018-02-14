@@ -130,7 +130,9 @@ ggplot(plot.data) +
 
 ggsave(paste0(fig.path, "Targeted.png"))
 
+lapply(levels(rbs$Business.type, function (x) {suvexp}))
 
+#Misc
 ggplot(rbs) +
   geom_histogram(aes(x = Severity.score))
 
