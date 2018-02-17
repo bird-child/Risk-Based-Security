@@ -167,29 +167,35 @@ mod.data <- mod.data %>%
                      comp.rate = factor(round(Organization.rating)), 
                      sev.score = factor(round(Severity.score)))
 
-fit <- survfit(Surv(time, status) ~ comp.rate + sev.score, data = mod.data)
+table(mod.data$comp.rate, mod.data$Business.type)
+
+fit <- survfit(Surv(time, status) ~ comp.rate + Business.type, data = mod.data)
 
 risk.60 <- mod.data %>%
-    group_by(comp.rate, sev.score) %>%
+    group_by(comp.rate, Business.type) %>%
     summarise(time = max(time)) %>%
     filter(time >= 60) %>%
     ungroup() %>%
-    mutate(risk.60 = 1 - summary(fit, 60)$surv, 
-           lcl.60 = 1 - summary(fit, 60)$lower, 
-           ucl.60 = 1 - summary(fit, 60)$upper) %>%
+    mutate(risk_60 = 1 - summary(fit, 60)$surv, 
+           lcl_60 = 1 - summary(fit, 60)$upper, 
+           ucl_60 = 1 - summary(fit, 60)$lower) %>%
     dplyr::select(-time)
 
 risk.120 <- mod.data %>%
-  group_by(comp.rate, sev.score) %>%
+  group_by(comp.rate, Business.type) %>%
   summarise(time = max(time)) %>%
   filter(time >= 120) %>%
   ungroup() %>%
-  mutate(risk.120 = 1 - summary(fit, 120)$surv, 
-         lcl.120 = 1 - summary(fit, 120)$lower, 
-         ucl.120 = 1 - summary(fit, 120)$upper) %>%
+  mutate(risk_120 = 1 - summary(fit, 120)$surv, 
+         lcl_120 = 1 - summary(fit, 120)$upper, 
+         ucl_120 = 1 - summary(fit, 120)$lower) %>%
   dplyr::select(-time)
 
-risk <- full_join(risk.60, risk.120, by = c("comp.rate" = "comp.rate", "sev.score" = "sev.score"))
+risk <- full_join(risk.60, risk.120, by = c("comp.rate" = "comp.rate", "Business.type" = "Business.type")) %>%
+          rename(Business_type = Business.type, Company_rating = comp.rate) %>%
+          mutate(Business_type = factor(Business_type), 
+                 Company_rating = factor(Company_rating)) %>%
+          complete(Business_type, Company_rating)
 
 save(risk, file = "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/risk.Rda")
 write_csv(risk, "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/risk.csv")
