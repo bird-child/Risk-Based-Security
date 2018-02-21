@@ -5,66 +5,121 @@
 #------------------------------------------------------------------------------
 
 #Purpose-----------------------------------------------------------------------
-#Cleans data for survival analyses and imputes total number of people affected 
-#by th breach
+#Imputations of # Affected and > 2,000 affected 
 #------------------------------------------------------------------------------
 
 #Packages----------------------------------------------------------------------
 pacman::p_load(dplyr, tidyr, broom, forcats, ggplot2, lubridate, purrr, 
-               stringr, randomForest, caret, readr, perturb, corrplot, 
-               pROC)
+               stringr, randomForest, caret, readr, perturb, pROC)
+
+options(scipen = 9999)
+set.seed(12345)
 #------------------------------------------------------------------------------
 
 #Data Importation--------------------------------------------------------------
-load("C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rbs_miss.Rda")
+#Change to location where data are stored.
+data.path <- "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/"
 
+load(paste0(data.path, "rbs_miss.Rda"))
+
+#Copies rbs and removes/preps fields for imputation
 rbs2 <- rbs %>%
-          mutate(y = factor(ifelse(person.cost >= 2000, "1", "0"))) %>%
-          dplyr::select(-Incident.occurred, -status, -time, -person.cost, -Id)
+  #Removes character fields with too many levels to be factors or are identical to 
+  #other fields in the data set. Including them in the imputation would create 
+  #colinearty and singularity issues.
+  dplyr::select(-Urls, -`Organization - address 1`, - `Organization - address 2`, 
+                -`Exploit cve`, -References, -Summary, -`Breach location - address`, 
+                -Latitude, -Longitude, -Gmaps, -`Organization address`, -`Naics code`, 
+                -`Actor - person`, -`Actor - group`,
+                -Name, -`Organization - city`, -`Organization - postcode`, 
+                -`Data type`, -`Third party name`, -`Stock symbol`, -`Court costs`, 
+                -`Non court costs`, -`Breach location - country`, 
+                -`Breach location - state`, -`Related incidents`, 
+                -`Total affected`, -`Economic sector`) 
 #------------------------------------------------------------------------------
 
-#Model Fitting-----------------------------------------------------------------
-set.seed(12345)
+#Exploration of Patterns of missingness----------------------------------------
+#Determines % of records with missing values for each field 
+miss_summ <- data.frame(name = names(rbs2), 
+                        prop.miss = map_dbl(seq_along(rbs2), 
+                                            function (x) {
+                                              sum(is.na(rbs2[, x]))/nrow(rbs2)
+                                              }), 
+                        index = 1:ncol(rbs2)) %>%
+                        arrange(desc(prop.miss)) 
 
-#Restrict to complete cases
-rbs.complete <- rbs2[complete.cases(rbs), ] #%>%
-                  #Getting less accurate results including the handful of 
-                  #records with more than 100 000 000 affected
-                  #filter(person.cost < 100000000)
+miss_summ
 
-#Splits data into two equal folds
-folds = createFolds(rbs.complete$y, k = 3, list = TRUE, 
+#Target variables have ~33% missing - other variables with more missings won't 
+#aid the imputation, so remove them
+enough <- miss.summ %>%
+            filter(prop.miss < 0.5)
+
+#Data set to for imputations
+for_imps <- rbs2 %>% 
+              select(enough$index) %>%
+              #remaining variables with missings are factors where missing is 
+              #a meaningful category. Forces NAs to "Missing"
+              mutate_if(is.factor, fct_explicit_na) %>%
+              #Status is constant, and Incident occured likely doesn't have
+              #much information that we dont have in other date fields
+              #time is a transformation of Date reported
+              select(-`Incident occurred`, -status, -time) %>%
+              mutate(y.bin = factor(`> 2,000 affected`))
+
+names(for_imps) <- gsub(" ",".", names(for_imps))
+
+#For continuous imputation
+for_cont_imp <- for_imps %>%
+                  select(-`>.2,000.affected`, -y.bin)
+
+#For binary imputation
+for_bin_imp <- for_imps %>%
+                select(-`#.Affected`, -`>.2,000.affected`)
+
+complete <- for_imps[complete.cases(for_imps), ]
+
+#Splits data into three equal folds
+folds <- createFolds(rbs.complete$y.bin, k = 3, list = TRUE, 
                     returnTrain = FALSE)
+#------------------------------------------------------------------------------
 
-#How does the linear model do?
-fit <- glm(y ~ ., rbs.complete[folds$Fold1, ], family = binomial)
-pred <- predict(fit, rbs.complete[folds$Fold2, ], type = "response")
-obs <- rbs.complete[folds$Fold2, ]$y
+#Continuous Imputation---------------------------------------------------------
+#Restricts to complete cases
+rbs.complete <- for_cont_imp[complete.cases(for_cont_imp), ] 
 
+#Fits model with training data
+rf.train <- randomForest(`#.Affected` ~ ., data = rbs.complete[-folds$Fold3, ], 
+                         ntrees = 1000)
+
+#Evaluates predictions on test data
+pred <- predict(rf.train, rbs.complete[folds$Fold3, ])
+obs <- rbs.complete[folds$Fold3, ]$`#.Affected`
+resid <- obs - pred
+mse <- sum(resid^2)/nrow(rbs.complete[folds$Fold3, ])
+sqrt(mse)
+
+#Final model
+system.time(
+  rf_cont <- randomForest(`#.Affected` ~ ., data = rbs.complete, ntrees = 1000)
+)
+
+save(rf_cont, file = paste0(data.path, "rf_cont.Rda"))
+
+# load(paste0(data.path, "rf_cont.Rda"))
+#------------------------------------------------------------------------------
+
+#Binary Imputation-------------------------------------------------------------
+#Restricts to complete cases
+rbs.complete <- for_bin_imp[complete.cases(for_bin_imp), ] 
 
 #Fits the training model
-rf.train <- randomForest(y ~ ., data = rbs.complete[-folds$Fold3, ], 
+rf.train <- randomForest(y.bin ~ ., data = rbs.complete[-folds$Fold3, ], 
                          ntrees = 1000)
-pred <- predict(rf.train, type = "class")
-obs <- rbs.complete[-folds$Fold3, ]$y
-forest.confusion <- table(obs, pred)
-forest.confusion
-forest.misclass <- (forest.confusion[1, 2] + forest.confusion[2, 1])/sum(forest.confusion)
-forest.misclass
-forest.specificity <- forest.confusion[1, 1]/(forest.confusion[1, 1] + forest.confusion[1, 2])
-forest.specificity
-forest.sensitivity <- forest.confusion[2, 2]/(forest.confusion[2, 1] + forest.confusion[2, 2])
-forest.sensitivity
 
-pred <- predict(rf.train, type = "response")
-
-model.roc <- roc(obs, as.numeric(pred))
-plot.roc(model.roc)
-print(model.roc$auc)
-
-#Evaluates how the model performs on the training set
+#Evaluates prediction on test data
 pred <- predict(rf.train, rbs.complete[folds$Fold3, ], type = "class")
-obs <- rbs.complete[folds$Fold3, ]$y
+obs <- rbs.complete[folds$Fold3, ]$y.bin
 forest.confusion <- table(obs, pred)
 forest.confusion
 forest.misclass <- (forest.confusion[1, 2] + forest.confusion[2, 1])/sum(forest.confusion)
@@ -73,7 +128,6 @@ forest.specificity <- forest.confusion[1, 1]/(forest.confusion[1, 1] + forest.co
 forest.specificity
 forest.sensitivity <- forest.confusion[2, 2]/(forest.confusion[2, 1] + forest.confusion[2, 2])
 forest.sensitivity
-
 
 pred <- predict(rf.train, rbs.complete[folds$Fold3, ], type = "response")
 
@@ -81,26 +135,26 @@ model.roc <- roc(obs, as.numeric(pred))
 plot.roc(model.roc)
 print(model.roc$auc)
 
-
 #Final model
 system.time(
-rf <- randomForest(y ~ ., data = rbs.complete, ntrees = 1000)
+rf_bin <- randomForest(y.bin ~ ., data = rbs.complete, ntrees = 1000)
 )
 
-save(rf, file = "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rf.Rda")
+save(rf_bin, file = paste0(data.path, "rf_class.Rda"))
 
-# load("C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rf.Rda")
+# load(paste0(data.path, "rf_bin.Rda"))
 #------------------------------------------------------------------------------
 
 #Final Imputations-------------------------------------------------------------
 rbs.imp <- rbs %>%
-  mutate(y = factor(ifelse(person.cost >= 2000, "1", "0")),
-         `Total Affected` = factor(coalesce(y, 
-                                     predict(rf, rbs, type = "class")), 
-                                   levels = c("0", "1"), 
-                                   label = c("<2000", ">=2000"))) %>%
-  dplyr::select(Id, `Total Affected`)
+            mutate(`> 2,000 affected (imp)` = factor(coalesce(factor(`> 2,000 affected`), 
+                                                       predict(rf_bin, for_imps, 
+                                                               type = "class")),
+                                                       levels = c("0", "1"), 
+                                                       label = c(">2000", "<=2000")), 
+                   `# Affected (imp)` = coalesce(`# Affected`, 
+                                                 predict(rf_cont, for_imps))) 
 
-save(rbs.imp, file = "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rbs_imp.Rda")
-write_csv(rbs.imp, "C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Security/data/rbs_imp.csv")
+save(rbs.imp, file = paste0(data.path, "rbs_imp.Rda"))
+write_csv(rbs.imp, paste0(data.path, "rbs_imp.csv"))
 #------------------------------------------------------------------------------
