@@ -59,8 +59,8 @@ rbs <- raw %>%
          #Binary target indicator variable for breaches where > 2 000 affected
          over_2000_records_breached = ifelse(total_affected > 2000, 1, 0),
          #Groupings for preliminary survival analyses
-         organization_rating = factor(round(organization_rating)), 
-         severity_score = factor(round(severity_score))) %>%
+         organization_rating = factor(floor(2*organization_rating)/2), 
+         severity_score = factor(floor(2*severity_score)/2)) %>%
   #Forces character fields to factors
   mutate_if(is.character, factor) %>%
   #Forces date fields to numeric
@@ -82,7 +82,8 @@ rbs <- rbs %>%
                 -actor_person, -actor_group,
                 -name, -organization_city, -organization_postcode, 
                 -data_type, -third_party_name, -stock_symbol, -court_costs, 
-                -non_court_costs, -breach_location_country, 
+                # -non_court_costs, 
+                -breach_location_country, 
                 -breach_location_state, -related_incidents, 
                 -economic_sector, -id, -third_party, -data_recovered, 
                 -consumer_lawsuit, -arrest_prosecution, -data_family, 
@@ -105,7 +106,7 @@ enough <- miss_summ %>%
 
 #Data set to for imputations
 for_imps <- rbs %>% 
-  select(enough$index) %>%
+  select(enough$index, non_court_costs) %>%
   #remaining variables with missings are factors where missing is 
   #a meaningful category. Forces NAs to "Missing"
   mutate_if(is.factor, fct_explicit_na) %>%
@@ -117,11 +118,15 @@ for_imps <- rbs %>%
 
 #For continuous imputation
 for_cont_imp <- for_imps %>%
-  select(-over_2000_records_breached)
+  select(-over_2000_records_breached, -non_court_costs)
 
 #For binary imputation
 for_bin_imp <- for_imps %>%
-  select(-total_affected)
+  select(-total_affected, -non_court_costs)
+
+#For cost imputation
+for_cost_imp <- for_imps %>%
+  select(-over_2000_records_breached, -total_affected)
 
 #Continuous Imputation
 #Restricts to complete cases
@@ -145,12 +150,24 @@ save(rf_bin, file = "rf_class.Rda")
 
 # load("rf_class.Rda")
 
+#Cost Imputation
+#Restricts to complete cases
+rbs.complete <- for_cost_imp[complete.cases(for_cost_imp), ] 
+
+rf_cost <- randomForest(non_court_costs ~ ., data = rbs.complete, ntrees = 1000)
+
+save(rf_cost, file = "rf_cost.Rda")
+
+# load("rf_cont.Rda")
+
+
 rbs.imp <- rbs %>%
   mutate(over_2000_records_breached_imputed = factor(coalesce(factor(over_2000_records_breached), 
                                                     predict(rf_bin, for_imps, 
                                                             type = "class"))), 
          total_affected_imputed = coalesce(total_affected, 
-                                       predict(rf_cont, for_imps))) 
+                                       predict(rf_cont, for_imps)), 
+         cost_imputed = coalesce(non_court_costs, predict(rf_cost, for_imps))) 
 
 save(rbs.imp, file = "rbs_imp.Rda")
 write_csv(rbs.imp, "rbs_imp.csv")
@@ -195,3 +212,7 @@ risk <- risk.60 %>%
 save(risk, file = "risk.Rda")
 write_csv(risk, "risk.csv")
 #-----------------------------------------------------------------------------------
+
+#Test
+aggregate(total_affected_imputed ~ business_type	+ organization_rating,rbs.imp,min)
+aggregate(cost_imputed ~ business_type	+ organization_rating,rbs.imp,min)
