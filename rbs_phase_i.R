@@ -5,7 +5,7 @@
 
 #Packages----------------------------------------------------------------------
 pacman::p_load(dplyr, tidyr, broom, forcats, ggplot2, lubridate, purrr, 
-               stringr, survival, readr, randomForest, caret)
+               stringr, survival, readr, randomForest, caret, rms)
 
 options(scipen = 9999)
 set.seed(12345)
@@ -132,33 +132,32 @@ for_cost_imp <- for_imps %>%
 #Restricts to complete cases
 rbs.complete <- for_cont_imp[complete.cases(for_cont_imp), ] 
 
-rf_cont <- randomForest(total_affected ~ ., data = rbs.complete, ntrees = 1000)
+# rf_cont <- randomForest(total_affected ~ ., data = rbs.complete, ntrees = 1000)
+# 
+# save(rf_cont, file = "rf_cont.Rda")
 
-save(rf_cont, file = "rf_cont.Rda")
-
-# load("rf_cont.Rda")
+load("rf_cont.Rda")
 
 #Binary Imputation
 #Restricts to complete cases
 rbs.complete <- for_bin_imp[complete.cases(for_bin_imp), ] 
 
-rf_bin <- randomForest(over_2000_records_breached ~ ., data = rbs.complete,
-                       ntrees = 1000)
+# rf_bin <- randomForest(over_2000_records_breached ~ ., data = rbs.complete,
+#                        ntrees = 1000)
+# 
+# save(rf_bin, file = "rf_class.Rda")
 
-
-save(rf_bin, file = "rf_class.Rda")
-
-# load("rf_class.Rda")
+load("rf_class.Rda")
 
 #Cost Imputation
 #Restricts to complete cases
 rbs.complete <- for_cost_imp[complete.cases(for_cost_imp), ] 
 
-rf_cost <- randomForest(non_court_costs ~ ., data = rbs.complete, ntrees = 1000)
+# rf_cost <- randomForest(non_court_costs ~ ., data = rbs.complete, ntrees = 1000)
+# 
+# save(rf_cost, file = "rf_cost.Rda")
 
-save(rf_cost, file = "rf_cost.Rda")
-
-# load("rf_cont.Rda")
+load("rf_cost.Rda")
 
 
 rbs.imp <- rbs %>%
@@ -167,7 +166,8 @@ rbs.imp <- rbs %>%
                                                             type = "class"))), 
          total_affected_imputed = coalesce(total_affected, 
                                        predict(rf_cont, for_imps)), 
-         cost_imputed = coalesce(non_court_costs, predict(rf_cost, for_imps))) 
+         cost_imputed = coalesce(non_court_costs, predict(rf_cost, for_imps)), 
+         economic_sector = raw$economic_sector_name)
 
 save(rbs.imp, file = "rbs_imp.Rda")
 write_csv(rbs.imp, "rbs_imp.csv")
@@ -175,44 +175,65 @@ write_csv(rbs.imp, "rbs_imp.csv")
 
 #Survival----------------------------------------------------------------------
 #Fits time to breach model 
-fit <- survfit(Surv(time, status) ~ organization_rating + business_type,
-               data = rbs.imp)
+fit <- cph(Surv(time, status) ~ organization_rating + economic_sector,
+               data = rbs.imp, x = TRUE, y = TRUE)
+
+combos <- expand.grid(organization_rating = levels(rbs.imp$organization_rating),
+                      economic_sector = levels(factor(rbs.imp$economic_sector)))
+
+estimates.60 <- survest(fit, combos, times = 60)
 
 #Calculates risk of breach within 60 days and 95% CI
-risk.60 <- rbs.imp %>%
-  group_by(organization_rating, business_type) %>%
-  summarise(time = max(time)) %>%
-  filter(time >= 60) %>%
-  ungroup() %>%
-  mutate(risk = 1 - summary(fit, 60)$surv, 
-         lcl = 1 - summary(fit, 60)$upper, 
-         ucl = 1 - summary(fit, 60)$lower, 
-         time_horizon = 60) %>%
-  dplyr::select(-time)
+risk.60 <- combos %>%
+                mutate(time_horizon = 60, 
+                       risk = 1 - estimates.60$surv, 
+                       lcl = 1 - estimates.60$upper, 
+                       ucl = 1 - estimates.60$lower)
+
+
+estimates.120 <- survest(fit, combos, times = 120)
 
 #Calculates risk of breach within 120 days and 95% CI
-risk.120 <- rbs.imp %>%
-  group_by(organization_rating, business_type) %>%
-  summarise(time = max(time)) %>%
-  filter(time >= 120) %>%
-  ungroup() %>%
-  mutate(risk = 1 - summary(fit, 120)$surv, 
-         lcl = 1 - summary(fit, 120)$upper, 
-         ucl = 1 - summary(fit, 120)$lower, 
-         time_horizon = 120) %>%
-  dplyr::select(-time)
+risk.120 <- combos %>%
+                mutate(time_horizon = 120, 
+                       risk = 1 - estimates.120$surv, 
+                       lcl = 1 - estimates.120$upper, 
+                       ucl = 1 - estimates.120$lower)
 
-#Combines data sets
 risk <- risk.60 %>%
-  union_all(risk.120) %>%
-  mutate(business_type = factor(business_type), 
-         organization_rating = factor(organization_rating)) %>%
-  complete(business_type, organization_rating, time_horizon)
+          union_all(risk.120) 
 
 save(risk, file = "risk.Rda")
 write_csv(risk, "risk.csv")
 #-----------------------------------------------------------------------------------
 
-#Test
-aggregate(total_affected_imputed ~ business_type	+ organization_rating,rbs.imp,min)
-aggregate(cost_imputed ~ business_type	+ organization_rating,rbs.imp,min)
+#Aggregations-----------------------------------------------------------------------
+Results <-  rbs.imp %>%
+              mutate(data_type_raw = str_replace_all(raw$data_type, 
+                                                     c("NUM|NAA|ADD" = "G1", 
+                                                       "USR|PWD|MISC|EMA" = "G2", 
+                                                       "UNK|MED" = "G3", 
+                                                       "FIN|CCN|ACC" = "G4", 
+                                                       "SSN|DOB" = "G5", 
+                                                       "IP" = "G6")), 
+                     breach_type_raw = str_replace_all(raw$breach_type, 
+                                                       c("DisposalComputer|DisposalDocument|DisposalTape|DisposalDrive|DisposalMobile|Fax|LostComputer|LostDocument|LostDrive|LostLaptop|LostMedia|LostMobile|LostTape|MissingDocument|MissingDrive|MissingLaptop|MissingMedia|SnailMail" =
+                                                           "G1", 
+                                                         "Seizure|StolenComputer|StolenDocument|StolenDrive|StolenLaptop|StolenMedia|StolenMobile|StolenTape" = 
+                                                           "G2", 
+                                                         "Email|Other|Snooping|Unknown|Web" = "G3", 
+                                                         "Skimming" = "G4", 
+                                                         "FraudSe|Hack|Phishing|Virus" = "G5"))) %>%
+              rowwise() %>%
+              mutate(data_type = paste0(sort(unique(str_split(data_type_raw,"/")[[1]])),
+                                        collapse="/"), 
+                     breach_type = paste0(sort(unique(str_split(breach_type_raw,"/")[[1]])),
+                                        collapse="/")) %>%
+              group_by(economic_sector_name, organization_rating, data_type, breach_type) %>%
+              summarise(RowsBreached = mean(total_affected_imputed), 
+                       CostOfBreach = mean(cost_imputed)) %>%
+              right_join(risk, by = c("economic_sector_name" = "economic_sector", 
+                                      "organization_rating" = "organization_rating"))
+
+write.csv(Results,"ZackAllCombos3.csv")
+#-----------------------------------------------------------------------------------
