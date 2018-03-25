@@ -65,23 +65,37 @@ rbs <- raw %>%
   mutate_if(is.character, factor) %>%
   #Forces date fields to numeric
   mutate_if(is.Date, as.numeric) %>%
-  mutate_if(is.logical, factor)
-
+  mutate_if(is.logical, factor) %>%
+  mutate(data_type_raw = str_replace_all(data_type, 
+                                         c("NUM|NAA|ADD" = "G1", 
+                                           "USR|PWD|MISC|EMA" = "G2", 
+                                           "UNK|MED" = "G3", 
+                                           "FIN|CCN|ACC" = "G4", 
+                                           "SSN|DOB" = "G5", 
+                                           "IP" = "G6"))) %>%
+  rowwise() %>%
+  mutate(data_type = paste0(sort(unique(str_split(data_type_raw,"/")[[1]])),
+                            collapse="/")) 
+  
 save(rbs, file = "rbs_miss.Rda")
 #------------------------------------------------------------------------------------
 
 #Imputation--------------------------------------------------------------------------
 #Copies rbs and removes/preps fields for imputation
 rbs <- rbs %>%
+  data.frame() %>%
+  mutate(data_type = factor(data_type)) %>%
   #Removes character fields with too many levels to be factors or are identical to 
   #other fields in the data set. Including them in the imputation would create 
   #colinearty and singularity issues.
   dplyr::select(-urls, -organization_address_1, -organization_address_2, 
                 -exploit_cve, -references, -summary, -breach_location_address, 
-                -latitude, -longitude, -gmaps, -organization_address, -naics_code, 
+                -latitude, -longitude, -gmaps, -organization_address,
+                -naics_code,
                 -actor_person, -actor_group,
                 -name, -organization_city, -organization_postcode, 
-                -data_type, -third_party_name, -stock_symbol, -court_costs, 
+                -data_type_raw,
+                -third_party_name, -stock_symbol, -court_costs, 
                 # -non_court_costs, 
                 -breach_location_country, 
                 -breach_location_state, -related_incidents, 
@@ -132,32 +146,32 @@ for_cost_imp <- for_imps %>%
 #Restricts to complete cases
 rbs.complete <- for_cont_imp[complete.cases(for_cont_imp), ] 
 
-# rf_cont <- randomForest(total_affected ~ ., data = rbs.complete, ntrees = 1000)
-# 
-# save(rf_cont, file = "rf_cont.Rda")
+rf_cont <- randomForest(total_affected ~ ., data = rbs.complete, ntrees = 1000)
 
-load("rf_cont.Rda")
+save(rf_cont, file = "rf_cont.Rda")
+
+# load("rf_cont.Rda")
 
 #Binary Imputation
 #Restricts to complete cases
 rbs.complete <- for_bin_imp[complete.cases(for_bin_imp), ] 
 
-# rf_bin <- randomForest(over_2000_records_breached ~ ., data = rbs.complete,
-#                        ntrees = 1000)
-# 
-# save(rf_bin, file = "rf_class.Rda")
+rf_bin <- randomForest(over_2000_records_breached ~ ., data = rbs.complete,
+                       ntrees = 1000)
 
-load("rf_class.Rda")
+save(rf_bin, file = "rf_class.Rda")
+
+# load("rf_class.Rda")
 
 #Cost Imputation
 #Restricts to complete cases
 rbs.complete <- for_cost_imp[complete.cases(for_cost_imp), ] 
 
-# rf_cost <- randomForest(non_court_costs ~ ., data = rbs.complete, ntrees = 1000)
-# 
-# save(rf_cost, file = "rf_cost.Rda")
+rf_cost <- randomForest(non_court_costs ~ ., data = rbs.complete, ntrees = 1000)
 
-load("rf_cost.Rda")
+save(rf_cost, file = "rf_cost.Rda")
+
+# load("rf_cost.Rda")
 
 
 rbs.imp <- rbs %>%
@@ -167,7 +181,8 @@ rbs.imp <- rbs %>%
          total_affected_imputed = coalesce(total_affected, 
                                        predict(rf_cont, for_imps)), 
          cost_imputed = coalesce(non_court_costs, predict(rf_cost, for_imps)), 
-         economic_sector = raw$economic_sector_name)
+         economic_sector = factor(raw$economic_sector_name), 
+         naics_code = factor(raw$naics_code))
 
 save(rbs.imp, file = "rbs_imp.Rda")
 write_csv(rbs.imp, "rbs_imp.csv")
@@ -175,11 +190,16 @@ write_csv(rbs.imp, "rbs_imp.csv")
 
 #Survival----------------------------------------------------------------------
 #Fits time to breach model 
-fit <- cph(Surv(time, status) ~ organization_rating + economic_sector,
+fit <- cph(Surv(time, status) ~ 
+             # naics_code  + 
+             economic_sector
+           ,
                data = rbs.imp, x = TRUE, y = TRUE)
 
-combos <- expand.grid(organization_rating = levels(rbs.imp$organization_rating),
-                      economic_sector = levels(factor(rbs.imp$economic_sector)))
+# combos <- expand.grid(naics_code = levels(rbs.imp$naics_code),
+#                       economic_sector = levels(factor(rbs.imp$economic_sector)))
+
+combos <- data.frame(economic_sector = levels(rbs.imp$economic_sector))
 
 estimates.60 <- survest(fit, combos, times = 60)
 
@@ -208,32 +228,26 @@ write_csv(risk, "risk.csv")
 #-----------------------------------------------------------------------------------
 
 #Aggregations-----------------------------------------------------------------------
-Results <-  rbs.imp %>%
-              mutate(data_type_raw = str_replace_all(raw$data_type, 
-                                                     c("NUM|NAA|ADD" = "G1", 
-                                                       "USR|PWD|MISC|EMA" = "G2", 
-                                                       "UNK|MED" = "G3", 
-                                                       "FIN|CCN|ACC" = "G4", 
-                                                       "SSN|DOB" = "G5", 
-                                                       "IP" = "G6")), 
-                     breach_type_raw = str_replace_all(raw$breach_type, 
-                                                       c("DisposalComputer|DisposalDocument|DisposalTape|DisposalDrive|DisposalMobile|Fax|LostComputer|LostDocument|LostDrive|LostLaptop|LostMedia|LostMobile|LostTape|MissingDocument|MissingDrive|MissingLaptop|MissingMedia|SnailMail" =
-                                                           "G1", 
-                                                         "Seizure|StolenComputer|StolenDocument|StolenDrive|StolenLaptop|StolenMedia|StolenMobile|StolenTape" = 
-                                                           "G2", 
-                                                         "Email|Other|Snooping|Unknown|Web" = "G3", 
-                                                         "Skimming" = "G4", 
-                                                         "FraudSe|Hack|Phishing|Virus" = "G5"))) %>%
-              rowwise() %>%
-              mutate(data_type = paste0(sort(unique(str_split(data_type_raw,"/")[[1]])),
-                                        collapse="/"), 
-                     breach_type = paste0(sort(unique(str_split(breach_type_raw,"/")[[1]])),
-                                        collapse="/")) %>%
-              group_by(economic_sector_name, organization_rating, data_type, breach_type) %>%
+data_type_rates <- data.frame(data_type = paste0("G", 1:6), 
+                              ratio = c(5, 10, 40, 50, 65, 10)) %>%
+                    mutate(pct = ratio/sum(ratio))
+
+surv_results <-  rbs.imp %>%
+              group_by(economic_sector) %>%
               summarise(RowsBreached = mean(total_affected_imputed), 
                        CostOfBreach = mean(cost_imputed)) %>%
-              right_join(risk, by = c("economic_sector_name" = "economic_sector", 
-                                      "organization_rating" = "organization_rating"))
+              right_join(risk, by = c("economic_sector" = "economic_sector"))
+
+data_ty_cols <- do.call(rbind, replicate(2*nlevels(rbs.imp$economic_sector), 
+                                         data_type_rates, simplify = FALSE))
+
+Results <- do.call(rbind, replicate(nlevels(factor(data_type_rates$data_type)), 
+                                         surv_results, simplify = FALSE))%>%
+              arrange(economic_sector, time_horizon) %>%
+              cbind(data_ty_cols) %>%
+              mutate(RowsBreached_data_type = pct*RowsBreached, 
+                     CostOfBreach_data_type = pct*CostOfBreach)
+
 
 write.csv(Results,"ZackAllCombos3.csv")
 #-----------------------------------------------------------------------------------
