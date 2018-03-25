@@ -182,7 +182,7 @@ rbs.imp <- rbs %>%
                                        predict(rf_cont, for_imps)), 
          cost_imputed = coalesce(non_court_costs, predict(rf_cost, for_imps)), 
          economic_sector = factor(raw$economic_sector_name), 
-         naics_code = factor(raw$naics_code))
+         naics_code = factor(str_sub(as.character(raw$naics_code), 1, 4)))
 
 save(rbs.imp, file = "rbs_imp.Rda")
 write_csv(rbs.imp, "rbs_imp.csv")
@@ -191,15 +191,15 @@ write_csv(rbs.imp, "rbs_imp.csv")
 #Survival----------------------------------------------------------------------
 #Fits time to breach model 
 fit <- cph(Surv(time, status) ~ 
-             # naics_code  + 
-             economic_sector
+             naics_code  #+
+             # economic_sector
            ,
                data = rbs.imp, x = TRUE, y = TRUE)
 
 # combos <- expand.grid(naics_code = levels(rbs.imp$naics_code),
 #                       economic_sector = levels(factor(rbs.imp$economic_sector)))
 
-combos <- data.frame(economic_sector = levels(rbs.imp$economic_sector))
+combos <- data.frame(naics_code = levels(rbs.imp$naics_code))
 
 estimates.60 <- survest(fit, combos, times = 60)
 
@@ -233,17 +233,17 @@ data_type_rates <- data.frame(data_type = paste0("G", 1:6),
                     mutate(pct = ratio/sum(ratio))
 
 surv_results <-  rbs.imp %>%
-              group_by(economic_sector) %>%
+              group_by(naics_code) %>%
               summarise(RowsBreached = mean(total_affected_imputed), 
                        CostOfBreach = mean(cost_imputed)) %>%
-              right_join(risk, by = c("economic_sector" = "economic_sector"))
+              right_join(risk, by = c("naics_code" = "naics_code"))
 
-data_ty_cols <- do.call(rbind, replicate(2*nlevels(rbs.imp$economic_sector), 
+data_ty_cols <- do.call(rbind, replicate(2*nlevels(rbs.imp$naics_code), 
                                          data_type_rates, simplify = FALSE))
 
 Results <- do.call(rbind, replicate(nlevels(factor(data_type_rates$data_type)), 
                                          surv_results, simplify = FALSE))%>%
-              arrange(economic_sector, time_horizon) %>%
+              arrange(naics_code, time_horizon) %>%
               cbind(data_ty_cols) %>%
               mutate(RowsBreached_data_type = pct*RowsBreached, 
                      CostOfBreach_data_type = pct*CostOfBreach)
