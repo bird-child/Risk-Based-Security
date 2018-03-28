@@ -15,17 +15,8 @@ setwd("C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Secur
 #------------------------------------------------------------------------------
 
 #Read--------------------------------------------------------------------------
-#Two rows were not quite right, so I removed them and resaved the data set.
-# rbs <- 
-#   read_csv(paste0(data.path, "CRA Export (2015-2017).csv")
-# 
-# rbs <- rbs %>%
-#         filter(!is.na(Id), Id != 18588)
-# 
-# write_csv(rbs, paste0(data.path, "CRA_Export.csv"))
-
 #Uncleaned data
-raw <- read_csv("CRA_Export.csv")
+raw <- read_csv("breach_export_2018-03-26 18_54_52 +0000.csv - breach_export_2018-03-26 18_54_52 +0000.csv")
 
 names(raw) <- tolower(gsub(" ", "_", gsub("- ", "", 
                                           gsub("/", "_", names(raw)))))
@@ -40,7 +31,7 @@ rbs <- raw %>%
          #Forces Total affected from character to numeric
          total_affected = as.numeric(total_affected),
          #Days from 1/1/2015 to breach
-         time = as.numeric(as.Date(date_reported, format = "%m/%d/%y") - as.Date('2015-01-01')), 
+         time = as.numeric(as.Date(date_reported, format = "%m/%d/%y") - as.Date('2011-01-01')), 
          #All records are breaches
          status = 1, 
          #Formats date fields. Different formats were used for differet fields
@@ -75,7 +66,8 @@ rbs <- raw %>%
                                            "IP" = "G6"))) %>%
   rowwise() %>%
   mutate(data_type = paste0(sort(unique(str_split(data_type_raw,"/")[[1]])),
-                            collapse="/")) 
+                            collapse="/")) %>%
+  filter(time >= 0)
   
 save(rbs, file = "rbs_miss.Rda")
 #------------------------------------------------------------------------------------
@@ -91,7 +83,7 @@ rbs <- rbs %>%
   dplyr::select(-urls, -organization_address_1, -organization_address_2, 
                 -exploit_cve, -references, -summary, -breach_location_address, 
                 -latitude, -longitude, -gmaps, -organization_address,
-                -naics_code,
+                # -naics_code,
                 -actor_person, -actor_group,
                 -name, -organization_city, -organization_postcode, 
                 -data_type_raw,
@@ -127,7 +119,7 @@ for_imps <- rbs %>%
   #Status is constant, and Incident occured likely doesn't have
   #much information that we dont have in other date fields
   #time is a transformation of Date reported
-  select(-incident_occurred, -status, -time) %>%
+  select(-incident_occurred, -status, -time, -data_type, -naics_code) %>%
   mutate(over_2000_records_breached = factor(over_2000_records_breached))
 
 #For continuous imputation
@@ -181,8 +173,8 @@ rbs.imp <- rbs %>%
          total_affected_imputed = coalesce(total_affected, 
                                        predict(rf_cont, for_imps)), 
          cost_imputed = coalesce(non_court_costs, predict(rf_cost, for_imps)), 
-         economic_sector = factor(raw$economic_sector_name), 
-         naics_code = factor(str_sub(as.character(raw$naics_code), 1, 4)))
+         # naics_code = factor(str_sub(as.character(naics_code), 1, 4))
+         naics_code = factor(naics_code))
 
 save(rbs.imp, file = "rbs_imp.Rda")
 write_csv(rbs.imp, "rbs_imp.csv")
@@ -192,7 +184,7 @@ write_csv(rbs.imp, "rbs_imp.csv")
 #Fits time to breach model 
 fit <- cph(Surv(time, status) ~ 
              naics_code  #+
-             # economic_sector
+             # economic_sector_name
            ,
                data = rbs.imp, x = TRUE, y = TRUE)
 
