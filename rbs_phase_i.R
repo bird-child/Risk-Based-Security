@@ -16,7 +16,7 @@ setwd("C:/Users/Amanda/Documents/Documents/Analytics Adventures/Risk_Based_Secur
 
 #Read--------------------------------------------------------------------------
 #Uncleaned data
-raw <- read_csv("breach_export_2018-03-26 18_54_52 +0000.csv - breach_export_2018-03-26 18_54_52 +0000.csv")
+raw <- read_csv("breach_export_2018-03-26 18_54_52 +0000.csv")
 
 names(raw) <- tolower(gsub(" ", "_", gsub("- ", "", 
                                           gsub("/", "_", names(raw)))))
@@ -173,7 +173,6 @@ rbs.imp <- rbs %>%
          total_affected_imputed = coalesce(total_affected, 
                                        predict(rf_cont, for_imps)), 
          cost_imputed = coalesce(non_court_costs, predict(rf_cost, for_imps)), 
-         # naics_code = factor(str_sub(as.character(naics_code), 1, 4))
          naics_code = factor(naics_code))
 
 save(rbs.imp, file = "rbs_imp.Rda")
@@ -183,7 +182,7 @@ write_csv(rbs.imp, "rbs_imp.csv")
 #Survival----------------------------------------------------------------------
 #Fits time to breach model 
 fit <- cph(Surv(time, status) ~ 
-             naics_code  #+
+             business_group  #+
              # economic_sector_name
            ,
                data = rbs.imp, x = TRUE, y = TRUE)
@@ -191,7 +190,7 @@ fit <- cph(Surv(time, status) ~
 # combos <- expand.grid(naics_code = levels(rbs.imp$naics_code),
 #                       economic_sector = levels(factor(rbs.imp$economic_sector)))
 
-combos <- data.frame(naics_code = levels(rbs.imp$naics_code))
+combos <- data.frame(business_group = levels(rbs.imp$business_group))
 
 estimates.60 <- survest(fit, combos, times = 60)
 
@@ -225,17 +224,17 @@ data_type_rates <- data.frame(data_type = paste0("G", 1:6),
                     mutate(pct = ratio/sum(ratio))
 
 surv_results <-  rbs.imp %>%
-              group_by(naics_code) %>%
+              group_by(business_group) %>%
               summarise(RowsBreached = mean(total_affected_imputed), 
                        CostOfBreach = mean(cost_imputed)) %>%
-              right_join(risk, by = c("naics_code" = "naics_code"))
+              right_join(risk, by = c("business_group" = "business_group"))
 
-data_ty_cols <- do.call(rbind, replicate(2*nlevels(rbs.imp$naics_code), 
+data_ty_cols <- do.call(rbind, replicate(2*nlevels(rbs.imp$business_group), 
                                          data_type_rates, simplify = FALSE))
 
 Results <- do.call(rbind, replicate(nlevels(factor(data_type_rates$data_type)), 
                                          surv_results, simplify = FALSE))%>%
-              arrange(naics_code, time_horizon) %>%
+              arrange(business_group, time_horizon) %>%
               cbind(data_ty_cols) %>%
               mutate(RowsBreached_data_type = pct*RowsBreached, 
                      CostOfBreach_data_type = pct*CostOfBreach)
